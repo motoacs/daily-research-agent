@@ -1,0 +1,82 @@
+> ## Documentation Index
+> Fetch the complete documentation index at: https://docs.langchain.com/llms.txt
+> Use this file to discover all available pages before exploring further.
+
+# Deep Agents overview
+
+> Build agents that can plan, use subagents, and leverage file systems for complex tasks
+
+[`deepagents`](https://pypi.org/project/deepagents/) is a standalone library for building agents that can tackle complex, multi-step tasks. Built on LangGraph and inspired by applications like Claude Code, Deep Research, and Manus, deep agents come with planning capabilities, file systems for context management, and the ability to spawn subagents.
+
+## When to use deep agents
+
+Use deep agents when you need agents that can:
+
+* **Handle complex, multi-step tasks** that require planning and decomposition
+* **Manage large amounts of context** through file system tools
+* **Delegate work** to specialized subagents for context isolation
+* **Persist memory** across conversations and threads
+
+For simpler use cases, consider using LangChain's [`create_agent`](/oss/python/langchain/agents) or building a custom [LangGraph](/oss/python/langgraph/overview) workflow.
+
+## Core capabilities
+
+<Card title="Planning and task decomposition" icon="timeline">
+  Deep agents include a built-in `write_todos` tool that enables agents to break down complex tasks into discrete steps, track progress, and adapt plans as new information emerges.
+</Card>
+
+<Card title="Context management" icon="scissors">
+  File system tools (`ls`, `read_file`, `write_file`, `edit_file`) allow agents to offload large context to memory, preventing context window overflow and enabling work with variable-length tool results.
+</Card>
+
+<Card title="Subagent spawning" icon="people-group">
+  A built-in `task` tool enables agents to spawn specialized subagents for context isolation. This keeps the main agent's context clean while still going deep on specific subtasks.
+</Card>
+
+<Card title="Long-term memory" icon="database">
+  Extend agents with persistent memory across threads using LangGraph's Store. Agents can save and retrieve information from previous conversations.
+</Card>
+
+## Relationship to the LangChain ecosystem
+
+Deep agents is built on top of:
+
+* [LangGraph](/oss/python/langgraph/overview) - Provides the underlying graph execution and state management
+* [LangChain](/oss/python/langchain/overview) - Tools and model integrations work seamlessly with deep agents
+* [LangSmith](/langsmith/home) - Observability, evaluation, and deployment
+
+Deep agents applications can be deployed via [LangSmith Deployment](/langsmith/deployments) and monitored with [LangSmith Observability](/langsmith/observability).
+
+## Get started
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/oss/python/deepagents/quickstart">
+    Build your first deep agent
+  </Card>
+
+  <Card title="Customization" icon="sliders" href="/oss/python/deepagents/customization">
+    Learn about customization options
+  </Card>
+
+  <Card title="Middleware" icon="layer-group" href="/oss/python/deepagents/middleware">
+    Understand the middleware architecture
+  </Card>
+
+  <Card title="CLI" icon="terminal" href="/oss/python/deepagents/cli">
+    Use the Deep Agents CLI
+  </Card>
+
+  <Card title="Reference" icon="arrow-up-right-from-square" href="https://reference.langchain.com/python/deepagents/">
+    See the `deepagents` API reference
+  </Card>
+</CardGroup>
+
+***
+
+<Callout icon="pen-to-square" iconType="regular">
+  [Edit this page on GitHub](https://github.com/langchain-ai/docs/edit/main/src/oss/deepagents/overview.mdx) or [file an issue](https://github.com/langchain-ai/docs/issues/new/choose).
+</Callout>
+
+<Tip icon="terminal" iconType="regular">
+  [Connect these docs](/use-these-docs) to Claude, VSCode, and more via MCP for real-time answers.
+</Tip>
