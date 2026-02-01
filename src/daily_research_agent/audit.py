@@ -39,6 +39,13 @@ class AuditLogger:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
+def _extract_app_run_id(kwargs: Dict[str, Any]) -> Optional[str]:
+    metadata = kwargs.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("run_id"):
+        return str(metadata["run_id"])
+    return None
+
+
 def _summarize_tool_input(input_payload: Any) -> Dict[str, Any]:
     if isinstance(input_payload, dict):
         return {
@@ -88,6 +95,8 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_tool_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         name = kwargs.get("name") or (serialized.get("name") if isinstance(serialized, dict) else None)
         if run_id:
             self._tool_starts[run_id] = time.monotonic()
@@ -96,10 +105,12 @@ class AuditCallbackHandler(BaseCallbackHandler):
         self._logger.event(
             "tool_started",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "tool_name": str(name) if name else None,
                 "input": _summarize_tool_input(input_str),
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
+                "tags": tags,
             },
         )
 
@@ -107,17 +118,21 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_tool_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         start = self._tool_starts.pop(run_id, None)
         duration_ms = int((time.monotonic() - start) * 1000) if start else None
         tool_name = self._tool_names.pop(run_id, None)
         self._logger.event(
             "tool_finished",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "tool_name": tool_name,
                 "duration_ms": duration_ms,
                 "output": _estimate_output_size(output),
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
+                "tags": tags,
             },
         )
 
@@ -125,14 +140,18 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_tool_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         tool_name = self._tool_names.pop(run_id, None)
         self._logger.event(
             "tool_failed",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "tool_name": tool_name,
                 "error": str(error),
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
+                "tags": tags,
             },
         )
 
@@ -140,16 +159,20 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_llm_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         self._llm_starts[run_id] = time.monotonic()
         model_name = _extract_model_name(serialized)
         self._llm_models[run_id] = model_name
         self._logger.event(
             "llm_started",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "model": model_name,
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
                 "prompt_count": len(prompts) if isinstance(prompts, list) else None,
+                "tags": tags,
             },
         )
 
@@ -157,6 +180,8 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_llm_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         start = self._llm_starts.pop(run_id, None)
         duration_ms = int((time.monotonic() - start) * 1000) if start else None
         model_name = self._llm_models.pop(run_id, None)
@@ -167,11 +192,13 @@ class AuditCallbackHandler(BaseCallbackHandler):
         self._logger.event(
             "llm_finished",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "model": model_name,
                 "duration_ms": duration_ms,
                 "usage": usage,
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
+                "tags": tags,
             },
         )
 
@@ -179,13 +206,17 @@ class AuditCallbackHandler(BaseCallbackHandler):
         if not self._config.log_llm_events or not self._logger.enabled:
             return
         run_id = str(kwargs.get("run_id", ""))
+        app_run_id = _extract_app_run_id(kwargs)
+        tags = kwargs.get("tags") if isinstance(kwargs.get("tags"), list) else None
         model_name = self._llm_models.pop(run_id, None)
         self._logger.event(
             "llm_failed",
             {
+                "app_run_id": app_run_id,
                 "run_id": run_id,
                 "model": model_name,
                 "error": str(error),
                 "parent_run_id": str(kwargs.get("parent_run_id", "")),
+                "tags": tags,
             },
         )

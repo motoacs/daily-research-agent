@@ -19,6 +19,14 @@ class ToolLimitCallbackHandler(BaseCallbackHandler):
         self._audit = audit_logger
         self._count = 0
 
+    def _extract_app_run_id(self, kwargs: Any) -> str:
+        metadata = None
+        if isinstance(kwargs, dict):
+            metadata = kwargs.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("run_id"):
+            return str(metadata["run_id"])
+        return ""
+
     def on_tool_start(self, serialized: Any, input_str: Any, **kwargs: Any) -> None:
         name = kwargs.get("name")
         if name is None and isinstance(serialized, dict):
@@ -31,6 +39,7 @@ class ToolLimitCallbackHandler(BaseCallbackHandler):
                 self._audit.event(
                     "tool_limit_exceeded",
                     {
+                        "app_run_id": self._extract_app_run_id(kwargs),
                         "tool_name": str(name),
                         "max_calls": self._max_calls,
                         "count": self._count,
