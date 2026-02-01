@@ -1,0 +1,40 @@
+name = "article_default"
+version = 1
+
+[title]
+guidance = "Generate a concise, specific title that matches the topic and date."
+
+[[sections]]
+id = "summary"
+heading = "要約"
+required = true
+intent = "忙しい読者向けに結論と重要ポイントを先出しする"
+guidance = "3〜7行。断定は根拠がある範囲に限定。"
+
+[[sections]]
+id = "background"
+heading = "背景"
+required = true
+intent = "なぜ今この話題が重要かを説明する"
+guidance = "前提知識が薄い読者にも分かる説明。"
+
+[[sections]]
+id = "key_points"
+heading = "主要ポイント"
+required = true
+intent = "論点整理・比較・トレードオフを提示する"
+guidance = "箇条書き + 短い解説。必要なら比較表。"
+
+[[sections]]
+id = "open_questions"
+heading = "未確定/追加調査ポイント"
+required = false
+intent = "根拠不足や未確定事項を明示し、誤情報の増幅を避ける"
+guidance = "分からないことを分からないと書く。"
+
+[[sections]]
+id = "references"
+heading = "参考リンク"
+required = true
+intent = "参照した出典を一覧化する（Xを使った場合は投稿URLも含める）"
+guidance = "URLを列挙し、必要なら短い注記（媒体/公開日など）を添える。"

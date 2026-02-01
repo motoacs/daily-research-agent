@@ -1,0 +1,77 @@
+[run]
+output_dir = "./outputs"
+timezone = "Asia/Tokyo"
+max_web_queries = 20
+include_run_artifacts = true
+state_dir = "./state"
+
+[models]
+# OpenRouter model IDs (provider/model), e.g. "openai/gpt-5.2".
+main = "openai/gpt-5.2"
+writer = "anthropic/claude-sonnet-4-5"
+
+[prompts]
+language = "ja"
+source_priority = """
+- Prefer primary sources (official docs, papers, release notes).
+- Use multiple independent sources.
+- If evidence is weak, state uncertainty explicitly.
+"""
+
+[prompts.presets.daily_ai_news]
+name = "Daily AI News (JP)"
+prompt = """
+You are a research + writing agent.
+Write a Japanese daily research article for {date}.
+Focus on items that are important, actionable, and supported by sources.
+If X bookmarks are available, use them as hints, but do not quote verbatim.
+Always include references (URLs) at the end.
+"""
+
+[presets.daily_ai_news]
+template = "./templates/article_default.toml"
+prompt_id = "daily_ai_news"
+
+[sources]
+daily_sites = [
+  "https://news.ycombinator.com/",
+  "https://www.reddit.com/r/MachineLearning/",
+  "https://platform.openai.com/docs/",
+]
+
+[logging]
+level = "INFO"
+format = "json"
+to_stdout = true
+to_file = true
+
+[x]
+enabled = true
+bookmarks_count = 20
+usage_policy = """
+X bookmarks are hints for what I care about today.
+Do not quote posts verbatim; summarize and research via web sources.
+Always include the post URL in references if used.
+"""
+
+[x.cache]
+enabled = true
+# Cache is used to avoid re-fetching already-seen bookmarks (cost control).
+path = "./state/x_bookmarks_cache.sqlite"
+stop_on_seen_streak = 20
+max_cached_posts = 20000
+
+[x.quote]
+# Whether to resolve quoted posts and include them in the structured input.
+resolve_depth = 2
+
+[mcp]
+servers = [
+  { name = "perplexity", transport = "http", url = "http://localhost:3000" },
+]
+
+[observability.langsmith]
+enabled = true
+project = "daily-research-agent"
+# endpoint is configured via env var LANGSMITH_ENDPOINT
+# api_key is configured via env var LANGSMITH_API_KEY
