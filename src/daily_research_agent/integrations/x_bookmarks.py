@@ -95,6 +95,86 @@ def _build_post_url(username: str, post_id: str) -> str:
     return f"https://x.com/{username}/status/{post_id}"
 
 
+def _parse_cached_posts(raw: str) -> List[BookmarkPost]:
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    posts = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        posts.append(
+            BookmarkPost(
+                id=item.get("id", ""),
+                url=item.get("url", ""),
+                text=item.get("text", ""),
+                author_username=item.get("author_username", ""),
+                author_name=item.get("author_name", ""),
+                created_at=item.get("created_at", ""),
+                referenced_posts=[],
+            )
+        )
+    return posts
+
+
+def load_cached_bookmarks(
+    cache_path: str,
+    limit: int,
+    exclude_ids: Optional[set[str]] = None,
+) -> List[BookmarkPost]:
+    if limit <= 0:
+        return []
+    exclude_ids = exclude_ids or set()
+    conn = sqlite3.connect(cache_path)
+    _init_db(conn)
+    rows = conn.execute(
+        """
+        SELECT id, url, text, author_username, author_name, created_at, referenced_posts
+        FROM bookmarks
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    posts = []
+    for row in rows:
+        if row[0] in exclude_ids:
+            continue
+        referenced = _parse_cached_posts(row[6] or "")
+        posts.append(
+            BookmarkPost(
+                id=row[0],
+                url=row[1],
+                text=row[2],
+                author_username=row[3],
+                author_name=row[4],
+                created_at=row[5],
+                referenced_posts=referenced,
+            )
+        )
+    return posts
+
+
+def _merge_with_cache(
+    new_posts: List[BookmarkPost],
+    cache_path: str,
+    limit: int,
+) -> List[BookmarkPost]:
+    if limit <= 0:
+        return []
+    if not cache_path:
+        return new_posts[:limit]
+    new_ids = {post.id for post in new_posts}
+    cached_posts = load_cached_bookmarks(cache_path, limit, exclude_ids=new_ids)
+    combined = new_posts + cached_posts
+    combined.sort(key=lambda post: post.created_at or "", reverse=True)
+    return combined[:limit]
+
+
 def _index_includes(payload: Dict) -> Tuple[Dict[str, Dict], Dict[str, Dict]]:
     includes = payload.get("includes", {})
     users = {user["id"]: user for user in includes.get("users", [])}
@@ -153,6 +233,8 @@ class XBookmarksClient:
         max_cached_posts: int,
         enabled_cache: bool,
     ) -> List[BookmarkPost]:
+        if max_results <= 0:
+            return []
         if not self._access_token:
             raise XBookmarksError("X_USER_ACCESS_TOKEN is not set")
 
@@ -166,8 +248,14 @@ class XBookmarksClient:
             user_id = self._get_user_id(client)
             next_token: Optional[str] = None
 
-            while len(new_posts) < max_results:
-                payload = self._get_bookmarks_page(client, user_id, max_results, next_token)
+            while True:
+                payload = self._get_bookmarks_page(
+                    client,
+                    user_id,
+                    max_results,
+                    next_token,
+                    resolve_depth,
+                )
                 data = payload.get("data", [])
                 if not data:
                     break
@@ -176,7 +264,7 @@ class XBookmarksClient:
                 cached_ids = _get_cached_ids(conn, ids) if enabled_cache else set()
 
                 for tweet in data:
-                    if tweet["id"] in cached_ids:
+                    if enabled_cache and tweet["id"] in cached_ids:
                         seen_streak += 1
                         if seen_streak >= stop_on_seen_streak:
                             break
@@ -191,7 +279,7 @@ class XBookmarksClient:
                     if len(new_posts) >= max_results:
                         break
 
-                if seen_streak >= stop_on_seen_streak:
+                if len(new_posts) >= max_results or seen_streak >= stop_on_seen_streak:
                     break
 
                 next_token = payload.get("meta", {}).get("next_token")
@@ -202,7 +290,9 @@ class XBookmarksClient:
             _cleanup_cache(conn, max_cached_posts)
         conn.commit()
         conn.close()
-        return new_posts
+        if enabled_cache:
+            return _merge_with_cache(new_posts, self._cache_path, max_results)
+        return new_posts[:max_results]
 
     def _get_user_id(self, client: httpx.Client) -> str:
         resp = client.get("/2/users/me")
@@ -215,12 +305,22 @@ class XBookmarksClient:
         return payload.get("data", {}).get("id")
 
     def _get_bookmarks_page(
-        self, client: httpx.Client, user_id: str, max_results: int, pagination_token: Optional[str]
+        self,
+        client: httpx.Client,
+        user_id: str,
+        max_results: int,
+        pagination_token: Optional[str],
+        resolve_depth: int,
     ) -> Dict:
+        expansions = ["author_id"]
+        tweet_fields = ["created_at", "author_id"]
+        if resolve_depth > 0:
+            expansions.extend(["referenced_tweets.id", "referenced_tweets.id.author_id"])
+            tweet_fields.append("referenced_tweets")
         params = {
             "max_results": min(max_results, 100),
-            "expansions": "author_id,referenced_tweets.id,referenced_tweets.id.author_id",
-            "tweet.fields": "created_at,referenced_tweets,author_id",
+            "expansions": ",".join(expansions),
+            "tweet.fields": ",".join(tweet_fields),
             "user.fields": "name,username",
         }
         if pagination_token:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import asdict
 from datetime import date, datetime, timezone
+from zoneinfo import ZoneInfo
 import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,7 +25,11 @@ from daily_research_agent.domain.prompts import (
     load_article_template,
 )
 from daily_research_agent.integrations.mcp_client import MCPResearchClient
-from daily_research_agent.integrations.x_bookmarks import XBookmarksClient, XBookmarksError
+from daily_research_agent.integrations.x_bookmarks import (
+    XBookmarksClient,
+    XBookmarksError,
+    load_cached_bookmarks,
+)
 from daily_research_agent.logging import get_logger
 from daily_research_agent.tools.x_oauth import (
     load_token_payload,
@@ -71,10 +76,13 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _build_chat_model(model_id: str, openrouter: Dict[str, Any]) -> ChatOpenAI:
+    max_tokens_env = os.getenv("OPENROUTER_MAX_TOKENS")
+    max_tokens = int(max_tokens_env) if max_tokens_env else 4096
     kwargs = {
         "model": model_id,
         "api_key": openrouter.get("api_key"),
         "base_url": openrouter.get("base_url"),
+        "max_tokens": max_tokens,
     }
     headers = openrouter.get("default_headers")
     if headers:
@@ -101,6 +109,44 @@ def _normalize_sources(raw_sources: List[Dict[str, Any]]) -> List[Source]:
 
 def _serialize_bookmarks(bookmarks: List[BookmarkPost]) -> List[Dict[str, Any]]:
     return [asdict(post) for post in bookmarks]
+
+
+def _truncate_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return f"{text[: max_chars - 3]}..."
+
+
+def _serialize_bookmarks_for_prompt(
+    bookmarks: List[BookmarkPost],
+) -> List[Dict[str, Any]]:
+    max_chars = int(os.getenv("BOOKMARK_TEXT_MAX_CHARS", "500"))
+    max_refs = int(os.getenv("BOOKMARK_REFERENCED_MAX", "1"))
+    max_bookmarks = int(os.getenv("BOOKMARKS_PROMPT_LIMIT", "20"))
+
+    def _serialize_ref(post: BookmarkPost) -> Dict[str, Any]:
+        return {
+            "id": post.id,
+            "url": post.url,
+            "text": _truncate_text(post.text, max_chars),
+            "author_username": post.author_username,
+            "author_name": post.author_name,
+            "created_at": post.created_at,
+        }
+
+    output: List[Dict[str, Any]] = []
+    for post in bookmarks[:max_bookmarks]:
+        payload: Dict[str, Any] = _serialize_ref(post)
+        if post.referenced_posts and max_refs > 0:
+            payload["referenced_posts"] = [
+                _serialize_ref(ref) for ref in post.referenced_posts[:max_refs]
+            ]
+        output.append(payload)
+    return output
 
 
 def _build_run_metadata(
@@ -134,7 +180,8 @@ async def run_orchestrator(
     article_date: date,
 ) -> RunPaths:
     template = load_article_template(preset.template_path)
-    run_paths = build_run_paths(config.run.output_dir, article_date, None)
+    run_time = datetime.now(ZoneInfo(config.run.timezone))
+    run_paths = build_run_paths(config.run.output_dir, article_date, None, run_time)
     ensure_dirs(run_paths)
     config.run.state_dir.mkdir(parents=True, exist_ok=True)
 
@@ -185,9 +232,29 @@ async def run_orchestrator(
                     bookmarks = _fetch_with_token(new_access_token)
                 else:
                     raise
+            if not bookmarks and config.x.cache.enabled:
+                bookmarks = load_cached_bookmarks(
+                    str(config.x.cache.path),
+                    config.x.bookmarks_count,
+                )
+                if bookmarks:
+                    logger.info(
+                        "x_bookmarks_loaded_from_cache",
+                        {"count": len(bookmarks)},
+                    )
         except XBookmarksError as exc:
             x_failed = True
-            logger.error("x_bookmarks_failed", error=str(exc))
+            logger.error("x_bookmarks_failed", {"error": str(exc)})
+            if config.x.cache.enabled:
+                bookmarks = load_cached_bookmarks(
+                    str(config.x.cache.path),
+                    config.x.bookmarks_count,
+                )
+                if bookmarks:
+                    logger.info(
+                        "x_bookmarks_loaded_from_cache",
+                        {"count": len(bookmarks)},
+                    )
     else:
         logger.info("x_bookmarks_disabled")
 
@@ -202,10 +269,10 @@ async def run_orchestrator(
         tools_bundle = await mcp_client.connect()
         mcp_tools = tools_bundle.tools
         tool_names = tools_bundle.tool_names
-        logger.info("mcp_tools_ready", tool_names=tool_names)
+        logger.info("mcp_tools_ready", {"tool_names": tool_names})
     except Exception as exc:  # noqa: BLE001 - capture MCP failures
         mcp_failed = True
-        logger.error("mcp_connect_failed", error=str(exc))
+        logger.error("mcp_connect_failed", {"error": str(exc)})
 
     run_metadata = _build_run_metadata(
         config,
@@ -241,7 +308,7 @@ async def run_orchestrator(
         model=researcher_model,
         tools=mcp_tools,
         system_prompt=research_prompt,
-        workspace=backend,
+        backend=backend,
     )
 
     research_input = {
@@ -250,7 +317,8 @@ async def run_orchestrator(
                 content=(
                     "Use the available tools to gather sources. "
                     "Output JSON only.\n\n"
-                    f"Bookmarks JSON:\n{json.dumps(_serialize_bookmarks(bookmarks), ensure_ascii=False, indent=2)}"
+                    "Bookmarks JSON:\n"
+                    f"{json.dumps(_serialize_bookmarks_for_prompt(bookmarks), ensure_ascii=False, separators=(',', ':'))}"
                 )
             )
         ]
@@ -273,7 +341,7 @@ async def run_orchestrator(
             )
         except Exception as exc:  # noqa: BLE001
             mcp_failed = True
-            logger.error("research_agent_failed", error=str(exc))
+            logger.error("research_agent_failed", {"error": str(exc)})
 
     research_text = ""
     parsed = None
@@ -309,7 +377,7 @@ async def run_orchestrator(
         model=writer_model,
         tools=[],
         system_prompt=writer_prompt,
-        workspace=backend,
+        backend=backend,
     )
 
     writer_input = {
@@ -317,8 +385,10 @@ async def run_orchestrator(
             HumanMessage(
                 content=(
                     "Use the research findings below to write the article.\n\n"
-                    f"Findings JSON:\n{json.dumps(parsed, ensure_ascii=False, indent=2)}\n\n"
-                    f"Bookmarks JSON:\n{json.dumps(_serialize_bookmarks(bookmarks), ensure_ascii=False, indent=2)}\n"
+                    "Findings JSON:\n"
+                    f"{json.dumps(parsed, ensure_ascii=False, separators=(',', ':'))}\n\n"
+                    "Bookmarks JSON:\n"
+                    f"{json.dumps(_serialize_bookmarks_for_prompt(bookmarks), ensure_ascii=False, separators=(',', ':'))}\n"
                 )
             )
         ]
@@ -339,12 +409,12 @@ async def run_orchestrator(
         )
         article_markdown = _extract_agent_text(writer_response)
     except Exception as exc:  # noqa: BLE001
-        logger.error("writer_agent_failed", error=str(exc))
+        logger.error("writer_agent_failed", {"error": str(exc)})
         raise OrchestratorError("Writer agent failed") from exc
 
     article_title = _extract_title(article_markdown)
     slug = slugify(article_title or "daily-research")
-    article_path = run_paths.article_dir / f"{slug}.md"
+    article_path = run_paths.article_dir / f"{slug}-{run_paths.run_suffix}.md"
     write_text(article_path, article_markdown)
 
     run_metadata["finished_at"] = datetime.now(timezone.utc).isoformat()
@@ -356,7 +426,7 @@ async def run_orchestrator(
     if mcp_client is not None:
         await mcp_client.close()
 
-    logger.info("run_completed", article_path=str(article_path))
+    logger.info("run_completed", {"article_path": str(article_path)})
     return run_paths
 
 

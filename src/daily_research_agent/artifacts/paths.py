@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 import re
 import uuid
@@ -10,6 +10,7 @@ import uuid
 @dataclass(frozen=True)
 class RunPaths:
     run_id: str
+    run_suffix: str
     run_dir: Path
     articles_dir: Path
     article_dir: Path
@@ -29,8 +30,17 @@ def slugify(value: str) -> str:
     return slug or "article"
 
 
-def build_run_paths(output_dir: Path, article_date: date, title: str | None) -> RunPaths:
-    run_id = f"{article_date.isoformat()}-{uuid.uuid4().hex[:8]}"
+def build_run_paths(
+    output_dir: Path,
+    article_date: date,
+    title: str | None,
+    run_time: datetime | None = None,
+) -> RunPaths:
+    run_time = run_time or datetime.now()
+    run_stamp = run_time.strftime("%H%M%S")
+    short_id = uuid.uuid4().hex[:8]
+    run_suffix = f"{run_stamp}-{short_id}"
+    run_id = f"{article_date.isoformat()}-{run_suffix}"
     run_dir = output_dir / "runs" / run_id
     articles_dir = output_dir / "articles"
     article_dir = articles_dir / article_date.isoformat()
@@ -38,6 +48,7 @@ def build_run_paths(output_dir: Path, article_date: date, title: str | None) -> 
 
     return RunPaths(
         run_id=run_id,
+        run_suffix=run_suffix,
         run_dir=run_dir,
         articles_dir=articles_dir,
         article_dir=article_dir,

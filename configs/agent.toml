@@ -1,9 +1,9 @@
 [run]
-output_dir = "./outputs"
+output_dir = "../outputs"
 timezone = "Asia/Tokyo"
 max_web_queries = 20
 include_run_artifacts = true
-state_dir = "./state"
+state_dir = "../state"
 
 [models]
 # OpenRouter model IDs (provider/model), e.g. "openai/gpt-5.2".
@@ -13,23 +13,23 @@ writer = "anthropic/claude-sonnet-4-5"
 [prompts]
 language = "ja"
 source_priority = """
-- Prefer primary sources (official docs, papers, release notes).
-- Use multiple independent sources.
-- If evidence is weak, state uncertainty explicitly.
+- 可能な限り一次資料（公式ドキュメント、技術論文、リリースノートなど）を優先する
+- 複数の独立した情報源を参照する
+- 証拠が不十分な場合は、不確実性を明確に記載する
 """
 
 [prompts.presets.daily_ai_news]
 name = "Daily AI News (JP)"
 prompt = """
-You are a research + writing agent.
-Write a Japanese daily research article for {date}.
-Focus on items that are important, actionable, and supported by sources.
-If X bookmarks are available, use them as hints, but do not quote verbatim.
-Always include references (URLs) at the end.
+あなたは研究＋執筆の専門家です。
+{date}の日本語デイリーリサーチ記事を作成してください。
+重要で実行可能、かつ出典に基づく情報に焦点を当ててください。
+X件のブックマークがある場合は参考として使用できますが、一字一句そのまま引用しないでください。
+必ず記事の最後に参考文献（URLs）を明記してください。
 """
 
 [presets.daily_ai_news]
-template = "./templates/article_default.toml"
+template = "../templates/article_default.toml"
 prompt_id = "daily_ai_news"
 
 [sources]
@@ -49,16 +49,16 @@ to_file = true
 enabled = true
 bookmarks_count = 10
 usage_policy = """
-X bookmarks are hints for what I care about today.
-Do not quote posts verbatim; summarize and research via web sources.
-Always include the post URL in references if used.
+Xのブックマークは、私が今日特に関心を持っている事柄のヒントです。
+投稿内容を一字一句そのまま引用せず、要約した上でウェブ上の情報源を参照して調査してください。
+引用する場合は、必ず元の投稿URLを参考文献として記載してください。
 """
 
 [x.cache]
 enabled = true
 # Cache is used to avoid re-fetching already-seen bookmarks (cost control).
-path = "./state/x_bookmarks_cache.sqlite"
-stop_on_seen_streak = 10
+path = "../state/x_bookmarks_cache.sqlite"
+stop_on_seen_streak = 5
 max_cached_posts = 20000
 
 [x.quote]
