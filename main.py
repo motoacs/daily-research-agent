@@ -1,5 +1,4 @@
-def main():
-    print("Hello from daily-research-agent!")
+from daily_research_agent.cli import main
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ prompt_id = "daily_ai_news"
 daily_sites = [
   "https://news.ycombinator.com/",
   "https://www.reddit.com/r/MachineLearning/",
-  "https://platform.openai.com/docs/",
+  "https://openai.com/ja-JP/news/",
 ]
 
 [logging]
@@ -47,7 +47,7 @@ to_file = true
 
 [x]
 enabled = true
-bookmarks_count = 20
+bookmarks_count = 10
 usage_policy = """
 X bookmarks are hints for what I care about today.
 Do not quote posts verbatim; summarize and research via web sources.
@@ -58,7 +58,7 @@ Always include the post URL in references if used.
 enabled = true
 # Cache is used to avoid re-fetching already-seen bookmarks (cost control).
 path = "./state/x_bookmarks_cache.sqlite"
-stop_on_seen_streak = 20
+stop_on_seen_streak = 10
 max_cached_posts = 20000
 
 [x.quote]
@@ -67,7 +67,7 @@ resolve_depth = 2
 
 [mcp]
 servers = [
-  { name = "perplexity", transport = "http", url = "http://localhost:3000" },
+  { name = "perplexity", transport = "stdio", command = "npx", args = ["-y", "@perplexity-ai/mcp-server"] },
 ]
 
 [observability.langsmith]

@@ -1,7 +1,33 @@
 [project]
 name = "daily-research-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "Local daily research agent using deepagents and LangChain"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+  "deepagents",
+  "langchain",
+  "langchain-core",
+  "langchain-openai",
+  "langchain-mcp-adapters",
+  "langgraph",
+  "mcp",
+  "pydantic",
+  "pydantic-settings",
+  "typer",
+  "httpx",
+  "python-dotenv>=1.2.1",
+]
+
+[project.scripts]
+daily-research-agent = "daily_research_agent.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/daily_research_agent"]
+
+[tool.uv]
+package = true

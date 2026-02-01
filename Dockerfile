@@ -7,7 +7,7 @@ WORKDIR /app
 
 # Install uv (network required at build time).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates nodejs npm \
  && curl -LsSf https://astral.sh/uv/install.sh | sh \
  && apt-get purge -y --auto-remove curl \
  && rm -rf /var/lib/apt/lists/*
