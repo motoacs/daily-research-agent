@@ -16,7 +16,7 @@ class MCPTools:
     tool_names: List[str]
 
 
-def _server_to_config(server: MCPServerConfig) -> dict:
+def _server_to_config(server: MCPServerConfig, env_allowlist: List[str]) -> dict:
     if server.transport == "http":
         return {
             "transport": "http",
@@ -28,7 +28,10 @@ def _server_to_config(server: MCPServerConfig) -> dict:
             "command": server.command,
             "args": server.args or [],
         }
-        base_env = dict(os.environ)
+        base_env: Dict[str, str] = {}
+        for key in env_allowlist:
+            if key in os.environ:
+                base_env[key] = os.environ[key]
         if server.env:
             base_env.update(server.env)
         config["env"] = base_env
@@ -37,13 +40,16 @@ def _server_to_config(server: MCPServerConfig) -> dict:
 
 
 class MCPResearchClient:
-    def __init__(self, servers: List[MCPServerConfig]) -> None:
+    def __init__(self, servers: List[MCPServerConfig], env_allowlist: Optional[List[str]] = None) -> None:
         self._servers = servers
+        self._env_allowlist = env_allowlist or []
         self._client: Optional[MultiServerMCPClient] = None
         self._tools: List[BaseTool] = []
 
     async def connect(self) -> MCPTools:
-        server_configs = {s.name: _server_to_config(s) for s in self._servers}
+        server_configs = {
+            s.name: _server_to_config(s, self._env_allowlist) for s in self._servers
+        }
         self._client = MultiServerMCPClient(server_configs)
         self._tools = await self._client.get_tools()
         tool_names = [tool.name for tool in self._tools]

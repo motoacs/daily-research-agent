@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,11 +25,6 @@ class ModelsConfig:
     verifier: Optional[str] = None
 
 
-@dataclass(frozen=True)
-class PromptsConfig:
-    language: str
-    source_priority: str
-    presets: Dict[str, Dict[str, str]]
 
 
 @dataclass(frozen=True)
@@ -49,6 +44,16 @@ class LoggingConfig:
     format: str
     to_stdout: bool
     to_file: bool
+    audit: "AuditLoggingConfig"
+
+
+@dataclass(frozen=True)
+class AuditLoggingConfig:
+    enabled: bool
+    path: str
+    log_llm_events: bool
+    log_tool_events: bool
+    redaction: str
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,7 @@ class MCPServerConfig:
 @dataclass(frozen=True)
 class MCPConfig:
     servers: List[MCPServerConfig]
+    env_allowlist: List[str]
 
 
 @dataclass(frozen=True)
@@ -110,6 +116,21 @@ class AgentConfig:
     x: XConfig
     mcp: MCPConfig
     observability: ObservabilityConfig
+    deepagents: "DeepAgentsConfig"
+    agents: "AgentsConfig"
+
+
+@dataclass(frozen=True)
+class PromptRegistryEntry:
+    text: str
+
+
+@dataclass(frozen=True)
+class PromptsConfig:
+    language: str
+    source_priority: str
+    presets: Dict[str, Dict[str, str]]
+    registry: Dict[str, PromptRegistryEntry]
 
 
 @dataclass(frozen=True)
@@ -117,6 +138,45 @@ class LoadedPreset:
     name: str
     prompt: str
     template_path: Path
+
+
+@dataclass(frozen=True)
+class AgentToolPolicy:
+    allow: List[str]
+    deny: List[str]
+
+
+@dataclass(frozen=True)
+class AgentDefinition:
+    model: str
+    prompt_id: str
+    description: Optional[str] = None
+    tools: AgentToolPolicy = field(default_factory=lambda: AgentToolPolicy(allow=[], deny=[]))
+    skills: List[str] = field(default_factory=list)
+    subagents: List[str] = field(default_factory=list)
+    user_prompt_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class SubAgentDefinition:
+    name: str
+    description: str
+    model: str
+    prompt_id: str
+    tools: AgentToolPolicy
+    skills: List[str]
+
+
+@dataclass(frozen=True)
+class AgentsConfig:
+    supervisor: AgentDefinition
+    subagents: Dict[str, SubAgentDefinition]
+
+
+@dataclass(frozen=True)
+class DeepAgentsConfig:
+    tool_token_limit_before_evict: Optional[int]
+    interrupt_on: Dict[str, bool]
 
 
 class ConfigError(RuntimeError):
@@ -155,6 +215,41 @@ def _parse_mcp_servers(raw: List[Dict[str, Any]]) -> List[MCPServerConfig]:
     return servers
 
 
+def _parse_tool_policy(raw: Dict[str, Any]) -> AgentToolPolicy:
+    return AgentToolPolicy(
+        allow=list(raw.get("allow", [])),
+        deny=list(raw.get("deny", [])),
+    )
+
+
+def _parse_agent_definition(raw: Dict[str, Any], path: str) -> AgentDefinition:
+    tools = _parse_tool_policy(raw.get("tools", {}))
+    return AgentDefinition(
+        model=_require(raw.get("model"), f"{path}.model"),
+        prompt_id=_require(raw.get("prompt_id"), f"{path}.prompt_id"),
+        description=raw.get("description"),
+        tools=tools,
+        skills=list(raw.get("skills", [])),
+        subagents=list(raw.get("subagents", [])),
+        user_prompt_id=raw.get("user_prompt_id"),
+    )
+
+
+def _parse_subagents(raw: Dict[str, Any]) -> Dict[str, SubAgentDefinition]:
+    subagents: Dict[str, SubAgentDefinition] = {}
+    for name, payload in raw.items():
+        tools = _parse_tool_policy(payload.get("tools", {}))
+        subagents[name] = SubAgentDefinition(
+            name=name,
+            description=_require(payload.get("description"), f"agents.subagents.{name}.description"),
+            model=_require(payload.get("model"), f"agents.subagents.{name}.model"),
+            prompt_id=_require(payload.get("prompt_id"), f"agents.subagents.{name}.prompt_id"),
+            tools=tools,
+            skills=list(payload.get("skills", [])),
+        )
+    return subagents
+
+
 def load_config(path: str | Path) -> AgentConfig:
     config_path = _to_path(path)
     if not config_path.exists():
@@ -183,10 +278,21 @@ def load_config(path: str | Path) -> AgentConfig:
 
     prompts = data.get("prompts", {})
     presets_prompts = prompts.get("presets", {})
+    raw_registry = prompts.get("registry", {})
+    registry: Dict[str, PromptRegistryEntry] = {}
+    for key, value in raw_registry.items():
+        if isinstance(value, dict):
+            text = value.get("text")
+        else:
+            text = value
+        registry[key] = PromptRegistryEntry(
+            text=_require(text, f"prompts.registry.{key}.text")
+        )
     prompts_config = PromptsConfig(
         language=prompts.get("language", "en"),
         source_priority=prompts.get("source_priority", ""),
         presets=presets_prompts,
+        registry=registry,
     )
 
     raw_presets = data.get("presets", {})
@@ -204,11 +310,19 @@ def load_config(path: str | Path) -> AgentConfig:
     sources_config = SourcesConfig(daily_sites=list(sources.get("daily_sites", [])))
 
     logging_cfg = data.get("logging", {})
+    audit_cfg = logging_cfg.get("audit", {})
     logging_config = LoggingConfig(
         level=logging_cfg.get("level", "INFO"),
         format=logging_cfg.get("format", "json"),
         to_stdout=bool(logging_cfg.get("to_stdout", True)),
         to_file=bool(logging_cfg.get("to_file", True)),
+        audit=AuditLoggingConfig(
+            enabled=bool(audit_cfg.get("enabled", False)),
+            path=audit_cfg.get("path", "../outputs/runs/{run_id}/audit.jsonl"),
+            log_llm_events=bool(audit_cfg.get("log_llm_events", True)),
+            log_tool_events=bool(audit_cfg.get("log_tool_events", True)),
+            redaction=audit_cfg.get("redaction", "strict"),
+        ),
     )
 
     x_cfg = data.get("x", {})
@@ -231,7 +345,10 @@ def load_config(path: str | Path) -> AgentConfig:
     )
 
     mcp_cfg = data.get("mcp", {})
-    mcp_config = MCPConfig(servers=_parse_mcp_servers(mcp_cfg.get("servers", [])))
+    mcp_config = MCPConfig(
+        servers=_parse_mcp_servers(mcp_cfg.get("servers", [])),
+        env_allowlist=list(mcp_cfg.get("env_allowlist", [])),
+    )
 
     langsmith_cfg = data.get("observability", {}).get("langsmith", {})
     observability_config = ObservabilityConfig(
@@ -239,6 +356,22 @@ def load_config(path: str | Path) -> AgentConfig:
             enabled=bool(langsmith_cfg.get("enabled", False)),
             project=langsmith_cfg.get("project", "daily-research-agent"),
         )
+    )
+
+    deep_cfg = data.get("deepagents", {})
+    deepagents_config = DeepAgentsConfig(
+        tool_token_limit_before_evict=deep_cfg.get("tool_token_limit_before_evict"),
+        interrupt_on=dict(deep_cfg.get("interrupt_on", {})),
+    )
+
+    agents_cfg = data.get("agents", {})
+    supervisor_cfg = agents_cfg.get("supervisor", {})
+    if not supervisor_cfg:
+        raise ConfigError("Missing required config: agents.supervisor")
+    subagents_cfg = _parse_subagents(agents_cfg.get("subagents", {}))
+    agents_config = AgentsConfig(
+        supervisor=_parse_agent_definition(supervisor_cfg, "agents.supervisor"),
+        subagents=subagents_cfg,
     )
 
     return AgentConfig(
@@ -251,6 +384,8 @@ def load_config(path: str | Path) -> AgentConfig:
         x=x_config,
         mcp=mcp_config,
         observability=observability_config,
+        deepagents=deepagents_config,
+        agents=agents_config,
     )
 
 

@@ -10,6 +10,10 @@
 # main = "openai/gpt-5.2"
 # writer = "anthropic/claude-sonnet-4-5"
 
+[deepagents]
+# tool_token_limit_before_evict = 20000
+# interrupt_on = { write_file = true, edit_file = true }
+
 [prompts]
 # language = "ja"
 # source_priority = """
@@ -17,6 +21,18 @@
 # - Use multiple independent sources.
 # - If evidence is weak, state uncertainty explicitly.
 # """
+#
+# [prompts.registry.supervisor_system]
+# text = """Supervisor system prompt..."""
+#
+# [prompts.registry.supervisor_user]
+# text = """User prompt template..."""
+#
+# [prompts.registry.researcher_system]
+# text = """Researcher system prompt..."""
+#
+# [prompts.registry.writer_system]
+# text = """Writer system prompt..."""
 #
 # [prompts.presets.daily_ai_news]
 # name = "Daily AI News (JP)"
@@ -28,6 +44,35 @@
 # [presets.daily_ai_news]
 # template = "./templates/article_default.toml"
 # prompt_id = "daily_ai_news"
+
+# [agents.supervisor]
+# model = "openai/gpt-5.2"
+# prompt_id = "supervisor_system"
+# user_prompt_id = "supervisor_user"
+# skills = ["skill_supervisor"]
+# subagents = ["researcher", "writer"]
+#
+# [agents.supervisor.tools]
+# allow = ["*"]
+# deny = []
+#
+# [agents.subagents.researcher]
+# description = "Research the topic"
+# model = "openai/gpt-5.2"
+# prompt_id = "researcher_system"
+# skills = ["skill_researcher"]
+#
+# [agents.subagents.researcher.tools]
+# allow = ["*"]
+#
+# [agents.subagents.writer]
+# description = "Write the article"
+# model = "anthropic/claude-sonnet-4-5"
+# prompt_id = "writer_system"
+# skills = ["skill_writer"]
+#
+# [agents.subagents.writer.tools]
+# allow = []
 
 [sources]
 # daily_sites = [
@@ -41,6 +86,13 @@
 # format = "json"
 # to_stdout = true
 # to_file = true
+#
+# [logging.audit]
+# enabled = true
+# path = "./outputs/runs/{run_id}/audit.jsonl"
+# log_llm_events = true
+# log_tool_events = true
+# redaction = "strict"
 
 [x]
 # enabled = true
@@ -61,6 +113,7 @@
 # resolve_depth = 2
 
 [mcp]
+# env_allowlist = ["PATH", "HOME", "PERPLEXITY_API_KEY"]
 # servers = [
 #   { name = "perplexity", transport = "http", url = "http://localhost:3000" },
 # ]

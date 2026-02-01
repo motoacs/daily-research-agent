@@ -10,12 +10,137 @@ state_dir = "../state"
 main = "openai/gpt-5.2"
 writer = "anthropic/claude-sonnet-4-5"
 
+[deepagents]
+# Optional: override tool eviction threshold if needed.
+# tool_token_limit_before_evict = 20000
+# Optional: human-in-the-loop for specific tools.
+# interrupt_on = { write_file = true, edit_file = true }
+
 [prompts]
 language = "ja"
 source_priority = """
 - 可能な限り一次資料（公式ドキュメント、技術論文、リリースノートなど）を優先する
 - 複数の独立した情報源を参照する
 - 証拠が不十分な場合は、不確実性を明確に記載する
+"""
+
+[prompts.registry.supervisor_system]
+text = """
+あなたは daily-research-agent の Supervisor です。
+write_todos で計画し、task で subagent に委譲しながら進めてください。
+
+日付: {date}
+タイムゾーン: {timezone}
+プリセット: {preset_name}
+言語: {language}
+最大Webクエリ数: {max_web_queries}
+
+ソース優先ルール:
+{source_priority}
+
+X利用ポリシー:
+{x_usage_policy}
+
+毎日チェック対象:
+{daily_sites}
+
+アーティファクト契約:
+- 入力 bookmarks: {artifact_paths.inputs.bookmarks_json}
+- 入力 template: {artifact_paths.inputs.template_toml}
+- 入力 run: {artifact_paths.inputs.run_json}
+- 調査 findings: {artifact_paths.research.findings_json}
+- 調査 sources: {artifact_paths.research.sources_json}
+- 調査 memo: {artifact_paths.research.memo_md}
+- 下書き article: {artifact_paths.draft.article_md}
+- 最終 article: {artifact_paths.final.article_md}
+- 失敗診断: {artifact_paths.run.diagnostics_md}
+
+失敗や不確実性は必ず memo または診断ファイルに記録してください。
+"""
+
+[prompts.registry.supervisor_user]
+text = """
+以下のアーティファクトを読み、日次リサーチ記事を作成してください。
+必要に応じて subagent を task で呼び出し、最終成果物を {artifact_paths.final.article_md} に保存してください。
+
+プリセット指示:
+{preset_prompt}
+"""
+
+[prompts.registry.researcher_system]
+text = """
+あなたは Researcher サブエージェントです。
+{artifact_paths.inputs.bookmarks_json} と {artifact_paths.inputs.template_toml} を読み、必要な追加調査を実施してください。
+
+出力:
+- findings: {artifact_paths.research.findings_json}
+- sources: {artifact_paths.research.sources_json}
+- memo: {artifact_paths.research.memo_md}
+
+findings は claim/evidence/confidence/sources(url) を含む JSON 配列にしてください。
+根拠が弱い場合は confidence を低めに設定し、memo に不確実性を書くこと。
+"""
+
+[prompts.registry.writer_system]
+text = """
+あなたは Writer サブエージェントです。
+{artifact_paths.research.findings_json} と {artifact_paths.research.sources_json} を読み、
+{artifact_paths.inputs.template_toml} に沿って記事を作成してください。
+
+出力:
+- 下書き: {artifact_paths.draft.article_md}
+- 最終稿: {artifact_paths.final.article_md}
+
+記事末尾に参考文献（URL）を必ず含めてください。
+X取得失敗: {x_failed} / MCP失敗: {mcp_failed} の場合は、不確実性や制約を明記してください。
+"""
+
+[prompts.registry.verifier_system]
+text = """
+あなたは Verifier サブエージェントです。
+{artifact_paths.final.article_md} を読み、表現の断定度・参照不足・引用粒度を確認してください。
+必要なら {artifact_paths.run.diagnostics_md} に指摘を記録してください。
+"""
+
+[prompts.registry.skill_researcher]
+text = """
+---
+name: research-guidelines
+description: 信頼できる出典収集と不確実性の明記を行うためのガイド。
+---
+
+# research-guidelines
+
+- 一次情報を優先し、複数ソースで裏取りすること。
+- 採用/非採用理由を memo に簡潔に残すこと。
+- 根拠が弱い場合は confidence を低とし、断定表現を避けること。
+"""
+
+[prompts.registry.skill_writer]
+text = """
+---
+name: writer-guidelines
+description: Markdown 記事の構成・出典記載・不確実性表現のガイド。
+---
+
+# writer-guidelines
+
+- テンプレの章立てに従い、論点整理・比較・トレードオフを含めること。
+- 参考文献（URL）を必ず末尾に記載すること。
+- 断定できない箇所は不確実性を明記すること。
+"""
+
+[prompts.registry.skill_supervisor]
+text = """
+---
+name: supervisor-guidelines
+description: Supervisor の進行管理と診断ログの作成ルール。
+---
+
+# supervisor-guidelines
+
+- write_todos で段階的に計画を立てること。
+- 失敗や不足があれば {artifact_paths.run.diagnostics_md} に記録すること。
 """
 
 [prompts.presets.daily_ai_news]
@@ -32,6 +157,44 @@ X (Twitter) のブックマークがある場合は参考として使用でき�
 template = "../templates/article_default.toml"
 prompt_id = "daily_ai_news"
 
+[agents.supervisor]
+model = "openai/gpt-5.2"
+prompt_id = "supervisor_system"
+user_prompt_id = "supervisor_user"
+skills = ["skill_supervisor"]
+subagents = ["researcher", "writer", "verifier"]
+
+[agents.supervisor.tools]
+allow = ["*"]
+deny = []
+
+[agents.subagents.researcher]
+description = "Web調査と根拠整理を行う"
+model = "openai/gpt-5.2"
+prompt_id = "researcher_system"
+skills = ["skill_researcher"]
+
+[agents.subagents.researcher.tools]
+allow = ["*"]
+
+[agents.subagents.writer]
+description = "調査結果から記事を書く"
+model = "anthropic/claude-sonnet-4-5"
+prompt_id = "writer_system"
+skills = ["skill_writer"]
+
+[agents.subagents.writer.tools]
+allow = []
+
+[agents.subagents.verifier]
+description = "断定表現や参照不足の確認を行う"
+model = "openai/gpt-5.2"
+prompt_id = "verifier_system"
+skills = []
+
+[agents.subagents.verifier.tools]
+allow = []
+
 [sources]
 daily_sites = [
   "https://news.ycombinator.com/",
@@ -44,6 +207,13 @@ level = "INFO"
 format = "json"
 to_stdout = true
 to_file = true
+
+[logging.audit]
+enabled = true
+path = "../outputs/runs/{run_id}/audit.jsonl"
+log_llm_events = true
+log_tool_events = true
+redaction = "strict"
 
 [x]
 enabled = true
@@ -66,6 +236,7 @@ max_cached_posts = 20000
 resolve_depth = 2
 
 [mcp]
+env_allowlist = ["PATH", "HOME", "PERPLEXITY_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL"]
 servers = [
   { name = "perplexity", transport = "stdio", command = "npx", args = ["-y", "@perplexity-ai/mcp-server"] },
 ]
