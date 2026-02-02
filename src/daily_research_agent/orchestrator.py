@@ -12,8 +12,9 @@ import subprocess
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend, StateBackend
+from deepagents.backends.utils import create_file_data
 from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import MemorySaver
 
 from daily_research_agent.artifacts.paths import RunPaths, build_run_paths, ensure_dirs, slugify
@@ -39,12 +40,13 @@ from daily_research_agent.prompting import (
     _make_namespace,
     render_prompt_with_dotted,
 )
-from daily_research_agent.tool_limits import ToolLimitCallbackHandler
+from daily_research_agent.tool_limits import ToolCallLimiter
 from daily_research_agent.tools.x_oauth import (
     load_token_payload,
     refresh_access_token,
     save_token_payload,
     token_file_path,
+    XOAuthError,
 )
 
 
@@ -121,7 +123,10 @@ def _configure_langsmith(config: AgentConfig, run_id: str) -> None:
 
 def _build_audit_logger(config: AgentConfig, run_paths: RunPaths) -> tuple[AuditLogger, AuditConfig]:
     audit_cfg = config.logging.audit
-    path = Path(audit_cfg.path.format(run_id=run_paths.run_id))
+    raw_path = audit_cfg.path.format(run_id=run_paths.run_id)
+    path = Path(raw_path)
+    if not path.is_absolute():
+        path = (config.run.output_dir / path).resolve()
     logger = AuditLogger(path=path, enabled=audit_cfg.enabled)
     return logger, AuditConfig(
         enabled=audit_cfg.enabled,
@@ -217,6 +222,50 @@ def _validate_article(article_text: str) -> List[str]:
     return issues
 
 
+def _looks_like_markdown_article(text: str) -> bool:
+    stripped = text.strip()
+    if len(stripped) < 200:
+        return False
+    if stripped.startswith("# "):
+        return True
+    if "\n# " in stripped or "\n## " in stripped:
+        return True
+    if "参考文献" in stripped or "References" in stripped:
+        return True
+    return False
+
+
+def _build_fallback_prompt(
+    *,
+    article_date: date,
+    timezone: str,
+    preset_name: str,
+    preset_prompt: str,
+    template_text: str,
+    bookmarks: List[BookmarkPost],
+    x_failed: bool,
+    mcp_failed: bool,
+) -> str:
+    bookmarks_json = json.dumps(_serialize_bookmarks(bookmarks), ensure_ascii=False, indent=2)
+    return (
+        "You are a research editor. Produce a Japanese daily research article in Markdown.\n"
+        f"Date: {article_date.isoformat()} ({timezone})\n"
+        f"Preset: {preset_name}\n\n"
+        "Constraints:\n"
+        "- Output Markdown only.\n"
+        "- Follow the template structure below.\n"
+        "- Include references (URLs) at the end.\n"
+        "- If evidence is insufficient, state uncertainty explicitly.\n"
+        f"- X failed: {x_failed} / MCP failed: {mcp_failed}\n\n"
+        "Preset instructions:\n"
+        f"{preset_prompt.strip()}\n\n"
+        "Template (TOML):\n"
+        f"{template_text.strip()}\n\n"
+        "Bookmarks JSON (hints, may be empty):\n"
+        f"{bookmarks_json}\n"
+    )
+
+
 async def run_orchestrator(
     config: AgentConfig,
     preset: LoadedPreset,
@@ -283,11 +332,16 @@ async def run_orchestrator(
             except XBookmarksError as exc:
                 if exc.status_code == 401 and refresh_token and client_id:
                     logger.warning("x_access_token_expired_try_refresh")
-                    new_payload = refresh_access_token(
-                        client_id=client_id,
-                        refresh_token=refresh_token,
-                        client_secret=client_secret,
-                    )
+                    try:
+                        new_payload = refresh_access_token(
+                            client_id=client_id,
+                            refresh_token=refresh_token,
+                            client_secret=client_secret,
+                        )
+                    except XOAuthError as refresh_exc:
+                        raise XBookmarksError(
+                            f"X OAuth refresh failed: {refresh_exc}"
+                        ) from refresh_exc
                     save_token_payload(token_path, new_payload)
                     new_access_token = new_payload.get("access_token") or ""
                     bookmarks = _fetch_with_token(new_access_token)
@@ -372,6 +426,15 @@ async def run_orchestrator(
         "mcp_failed": mcp_failed,
     }
     write_json(run_paths.artifacts.inputs.run_json, run_input)
+
+    if config.run.max_web_queries > 0 and tool_names:
+        limiter = ToolCallLimiter(
+            max_calls=config.run.max_web_queries,
+            tool_names=set(tool_names),
+            audit_logger=audit_logger,
+            run_id=run_paths.run_id,
+        )
+        mcp_tools = limiter.wrap_tools(mcp_tools)
 
     openrouter = openrouter_settings()
     if not openrouter.get("api_key"):
@@ -482,14 +545,6 @@ async def run_orchestrator(
     )
 
     callbacks = [AuditCallbackHandler(audit_logger, audit_config)]
-    if config.run.max_web_queries > 0 and tool_names:
-        callbacks.append(
-            ToolLimitCallbackHandler(
-                max_calls=config.run.max_web_queries,
-                tool_names=set(tool_names),
-                audit_logger=audit_logger,
-            )
-        )
 
     supervisor_input = {
         "messages": [
@@ -500,15 +555,19 @@ async def run_orchestrator(
         ]
     }
     if skill_files:
-        supervisor_input["files"] = skill_files
+        supervisor_input["files"] = {
+            path: create_file_data(content)
+            for path, content in skill_files.items()
+        }
 
     diagnostics: List[str] = []
+    supervisor_response: Any = None
     try:
         audit_logger.event(
             "agent_invoke_started",
             {"run_id": run_paths.run_id, "agent": "supervisor"},
         )
-        await supervisor_agent.ainvoke(
+        supervisor_response = await supervisor_agent.ainvoke(
             supervisor_input,
             config={
                 "tags": ["supervisor", preset.name],
@@ -536,8 +595,61 @@ async def run_orchestrator(
     article_markdown = ""
     if run_paths.artifacts.final.article_md.exists():
         article_markdown = run_paths.artifacts.final.article_md.read_text(encoding="utf-8")
+    elif supervisor_response is not None:
+        fallback_text = _extract_agent_text(supervisor_response).strip()
+        if fallback_text and _looks_like_markdown_article(fallback_text):
+            write_text(run_paths.artifacts.final.article_md, fallback_text)
+            article_markdown = fallback_text
+            logger.warning("final_article_missing_used_supervisor_response")
+        else:
+            diagnostics.append("Final article not found at /artifacts/final/article.md")
+            if not fallback_text:
+                diagnostics.append(
+                    f"Supervisor response was empty (type={type(supervisor_response).__name__})."
+                )
+                message_summary = _summarize_response_messages(supervisor_response)
+                if message_summary:
+                    diagnostics.append("--- supervisor_response_messages ---")
+                    diagnostics.extend(message_summary)
+            else:
+                preview = fallback_text[:800]
+                diagnostics.append("--- supervisor_response_preview ---")
+                diagnostics.append(preview)
     else:
         diagnostics.append("Final article not found at /artifacts/final/article.md")
+
+    if not article_markdown:
+        try:
+            fallback_model_id = config.models.writer or config.models.main
+            fallback_model = _build_chat_model(fallback_model_id, openrouter)
+            fallback_prompt = _build_fallback_prompt(
+                article_date=article_date,
+                timezone=config.run.timezone,
+                preset_name=preset.name,
+                preset_prompt=preset.prompt,
+                template_text=preset.template_path.read_text(encoding="utf-8"),
+                bookmarks=bookmarks,
+                x_failed=x_failed,
+                mcp_failed=mcp_failed,
+            )
+            fallback_response = fallback_model.invoke(
+                [HumanMessage(content=fallback_prompt)]
+            )
+            fallback_text = getattr(fallback_response, "content", "") or str(
+                fallback_response
+            )
+            fallback_text = fallback_text.strip()
+            if fallback_text and _looks_like_markdown_article(fallback_text):
+                write_text(run_paths.artifacts.final.article_md, fallback_text)
+                article_markdown = fallback_text
+                diagnostics.append("Fallback article generated from supervisor output.")
+                logger.warning("final_article_fallback_generated")
+            else:
+                diagnostics.append(
+                    "Fallback article generation did not produce valid markdown."
+                )
+        except Exception as exc:  # noqa: BLE001
+            diagnostics.append(f"Fallback article generation failed: {exc}")
 
     if article_markdown:
         diagnostics.extend(_validate_article(article_markdown))
@@ -593,10 +705,32 @@ def _extract_agent_text(response: Any) -> str:
     if isinstance(response, dict):
         messages = response.get("messages")
         if messages:
-            return messages[-1].content
+            for message in reversed(messages):
+                if isinstance(message, AIMessage) and message.content:
+                    return message.content
+            for message in reversed(messages):
+                if isinstance(message, ToolMessage):
+                    continue
+                content = getattr(message, "content", None)
+                if content:
+                    return content
     if hasattr(response, "content"):
         return response.content
     return str(response)
+
+
+def _summarize_response_messages(response: Any) -> List[str]:
+    if not isinstance(response, dict):
+        return []
+    messages = response.get("messages")
+    if not messages:
+        return []
+    summary = []
+    for message in messages[-5:]:
+        content = getattr(message, "content", None)
+        content_len = len(content) if content else 0
+        summary.append(f"{type(message).__name__}(content_len={content_len})")
+    return summary
 
 
 async def main_async(config: AgentConfig, preset: LoadedPreset, article_date: date) -> RunPaths:
