@@ -7,8 +7,8 @@ state_dir = "../state"
 
 [models]
 # OpenRouter model IDs (provider/model), e.g. "openai/gpt-5.2".
-main = "openai/gpt-5.2"
-writer = "anthropic/claude-sonnet-4-5"
+main = "moonshotai/kimi-k2.5"
+writer = "moonshotai/kimi-k2.5"
 
 [deepagents]
 # Optional: override tool eviction threshold if needed.
@@ -102,10 +102,10 @@ text = """
 必要なら {artifact_paths.run.diagnostics_md} に指摘を記録してください。
 """
 
-[prompts.registry.skill_researcher]
+[prompts.registry."skill-researcher"]
 text = """
 ---
-name: research-guidelines
+name: skill-researcher
 description: 信頼できる出典収集と不確実性の明記を行うためのガイド。
 ---
 
@@ -116,10 +116,10 @@ description: 信頼できる出典収集と不確実性の明記を行うため�
 - 根拠が弱い場合は confidence を低とし、断定表現を避けること。
 """
 
-[prompts.registry.skill_writer]
+[prompts.registry."skill-writer"]
 text = """
 ---
-name: writer-guidelines
+name: skill-writer
 description: Markdown 記事の構成・出典記載・不確実性表現のガイド。
 ---
 
@@ -130,10 +130,10 @@ description: Markdown 記事の構成・出典記載・不確実性表現のガ�
 - 断定できない箇所は不確実性を明記すること。
 """
 
-[prompts.registry.skill_supervisor]
+[prompts.registry."skill-supervisor"]
 text = """
 ---
-name: supervisor-guidelines
+name: skill-supervisor
 description: Supervisor の進行管理と診断ログの作成ルール。
 ---
 
@@ -158,10 +158,10 @@ template = "../templates/article_default.toml"
 prompt_id = "daily_ai_news"
 
 [agents.supervisor]
-model = "openai/gpt-5.2"
+model = "moonshotai/kimi-k2.5"
 prompt_id = "supervisor_system"
 user_prompt_id = "supervisor_user"
-skills = ["skill_supervisor"]
+skills = ["skill-supervisor"]
 subagents = ["researcher", "writer", "verifier"]
 
 [agents.supervisor.tools]
@@ -170,9 +170,9 @@ deny = []
 
 [agents.subagents.researcher]
 description = "Web調査と根拠整理を行う"
-model = "openai/gpt-5.2"
+model = "moonshotai/kimi-k2.5"
 prompt_id = "researcher_system"
-skills = ["skill_researcher"]
+skills = ["skill-researcher"]
 
 [agents.subagents.researcher.tools]
 allow = ["*"]
@@ -181,14 +181,14 @@ allow = ["*"]
 description = "調査結果から記事を書く"
 model = "anthropic/claude-sonnet-4-5"
 prompt_id = "writer_system"
-skills = ["skill_writer"]
+skills = ["skill-writer"]
 
 [agents.subagents.writer.tools]
 allow = []
 
 [agents.subagents.verifier]
 description = "断定表現や参照不足の確認を行う"
-model = "openai/gpt-5.2"
+model = "moonshotai/kimi-k2.5"
 prompt_id = "verifier_system"
 skills = []
 
@@ -243,6 +243,6 @@ servers = [
 
 [observability.langsmith]
 enabled = true
-project = "daily-research-agent"
+project = "My First App"
 # endpoint is configured via env var LANGSMITH_ENDPOINT
 # api_key is configured via env var LANGSMITH_API_KEY

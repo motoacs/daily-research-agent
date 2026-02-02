@@ -161,6 +161,7 @@ flowchart TD
   - `daily_sites`（毎日チェック対象）
 - `[logging]` / `[logging.audit]`
   - ローカルログと監査ログ（JSONL）
+  - `logging.audit.path` が相対パスの場合は `run.output_dir` を基準に解決する
 - `[x]` / `[x.cache]` / `[x.quote]`
   - X 取得の有効/無効・件数・ポリシー・キャッシュ
 - `[mcp]`
